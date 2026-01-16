@@ -4,7 +4,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define DEBUG 1
+#define DEBUG 0
 
 typedef uint8_t byte;
 
@@ -73,16 +73,22 @@ void encode(symbolTable *st, byte **in, byte **out){
 }	
 
 
-void decode(symbolTable *st, byte *in, byte *out){
-	byte code = *in++;
+void decode(symbolTable *st, byte **in, byte **out){
+	byte code = *((*in)++);
 	if(code != 255){
-		*((uint64_t*)out) = (uint64_t)(*(st->entry[code].symbol));
-		out += st->entry[code].len;
+		// No escape code so it substitutes the code with the corresponding symbol
+		*((uint64_t*)(*out)) = (uint64_t)(*(st->entry[code].symbol));
+		// Increases the pointer by the length of the symbol
+		*out += st->entry[code].len;
 	}
 	else{
-		*out++=*in++;
+		// Copying the byte
+		*((*out)++) = *((*in)++);
 	}
 }
+
+
+
 /*
 symbolTable *buildSymbolTableFromText(char *text){
 	symbolTable *st = stInit();
@@ -101,25 +107,47 @@ int main(void){
 	byte *p = (byte*)text;
 	byte *outbuf = malloc(sizeof(*text)*2 + 1);
 	byte *outp = outbuf;
-	size_t len = 0;
+	
 	while(p[0]!=0){
+#if DEBUG
 		printf("Pointer %p\n", p);
-		encode(st, &p, &outp);
-		len+=2;	
+#endif
+		encode(st, &p, &outp);	
 	}
-	// Adding null terminated byte
+	size_t len = (outp-outbuf);
+	// Adding null terminatation byte
 	outbuf[len] = 0;
 	printf("Successfully Encoded\n");
 	for(size_t i = 0; i < len; i++){
 		if(outbuf[i] !=255){
 			unsigned char c = (outbuf[i]);
-			if(isprint(c)) printf("%c\n",c);
+			if(isprint(c)) printf("%c ",c);
 			else printf("Unprintable, value %u\n",c);
 		}
 		else printf("Escape-");
 	}
-	free(st);
+	printf("\n");
+	byte *decoded = malloc(sizeof(*text)+1);
+	p = decoded;
+	byte *encoded = outbuf;
+	while(outp != encoded){
+	   	decode(st, &encoded, &p); 
+	}
+	printf("Successfully Decoded\n");
+	
 
+	len = p-decoded;
+	decoded[len]=0;
+	for(size_t i = 0; i<len; i++){
+		unsigned char c = decoded[i];
+		if(isprint(c)) printf("%c",c);
+		else printf("Unprintable, value %u\n",c);
+	}
+	printf("\n");
+
+
+	free(st);
+	free(decoded);
 	free(outbuf);
 	return 0;
 }
