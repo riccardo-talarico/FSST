@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <ctype.h>
+#include "heap.h"
 
 #define DEBUG 0
 
@@ -11,9 +12,9 @@ typedef uint8_t byte;
 typedef struct symbolEntry{
 	// can range from 1 to 8 byte
 	char *symbol;
-	uint8_t code;
 	//max length in byte is 8
 	byte len;
+	byte code;
 }symbolEntry;
 
 
@@ -39,6 +40,9 @@ symbolTable *stInit(void){
 	return st;
 }
 
+void insertSymbol(symbolTable *st, symbolEntry e){
+	st->entry[st->nSymbols++] = e;
+}
 
 byte findLongestSymbol(symbolTable *st, byte *text){
 	byte first = text[0];
@@ -128,6 +132,68 @@ void compressCount(symbolTable *st, uint32_t *count1, uint32_t count2[][512], ch
 	}
 }
 
+void makeIndex(symbolTable *st){
+	
+}
+
+
+void updateTable(symbolTable *st, uint32_t *count1, uint32_t count2[][512]){
+	heap *h = hinit();
+	for(uint32_t i = 0; i < 256+((uint32_t)st->nSymbols); i++){
+		uint32_t gain=count1[i];
+		if(gain == 0) continue;
+		candidate c;
+		c.gain = gain;
+		if(i<256){
+
+			c.len = 1;
+			memset(c.symbol, 0,8);
+			c.symbol[0] = i;
+		} else{
+			uint32_t j = i- 256;
+		   	c.len = st->entry[j].len;
+			c.gain *= ((uint32_t)c.len);
+			memcpy(c.symbol, st->entry[j].symbol,c.len);
+		}
+		hpush(h, c);
+		byte remaining_len = 8-c.len;
+		for(uint32_t k =0; k<256+((uint32_t)st->nSymbols); k++){
+			if(remaining_len == 0) break;
+			uint32_t freq = count2[i][k];
+			if(freq == 0) continue;
+			
+			candidate c2;
+
+			if(k<256){
+				memcpy(&(c2.symbol[c.len]), &k, 1);
+				c2.len = 1 + c.len;
+			}
+			else{
+				uint32_t j = k-256;
+				byte copy_len = (remaining_len>st->entry[j].len)? st->entry[j].len : remaining_len;
+				memcpy(&(c2.symbol[c.len]), &st->entry[j], copy_len);
+				c2.len = c.len + copy_len;
+			}
+			gain = c2.len * freq;
+			hpush(h, c2);
+		}
+	}
+	st->nSymbols = 0;
+	while(st->nSymbols < 255 && h->size > 0){
+
+		candidate c = hgetmin(h);
+		
+		symbolEntry e={0};
+		e.len = c.len;
+		e.code = st->nSymbols;
+		memcpy(&e.symbol, &c.symbol, e.len);	
+		insertSymbol(st,e);
+	}
+	free(h);
+	makeIndex(st);
+}
+
+
 /*
 symbolTable *buildSymbolTableFromText(char *text){
 	symbolTable *st = stInit();
@@ -150,9 +216,6 @@ int main(void){
 	byte *outp = outbuf;
 	
 	while(p[0]!=0){
-#if DEBUG
-		printf("Pointer %p\n", p);
-#endif
 		encode(st, &p, &outp);	
 	}
 	size_t len = (outp-outbuf);
@@ -169,16 +232,10 @@ int main(void){
 	}
 	printf("\n");
 	
-#if DEBUG
-	printf("Initiating decoding\n");
-#endif
 	byte *decoded = malloc(sizeof(*text)+1);
 	p = decoded;
 	byte *encoded = outbuf;
 	while(outp != encoded){
-#if DEBUG
-		printf("Pointer %p\n", p);
-#endif
 		decode(st, &encoded, &p); 
 	}
 	printf("Successfully Decoded\n");
@@ -192,9 +249,6 @@ int main(void){
 		else printf("Unprintable, value %u\n",c);
 	}
 	printf("\n");
-#if DEBUG
-	printf("Start compressCount\n");
-#endif
 	uint32_t count1[512]={0};
 	uint32_t count2[512][512]={0};
 	size_t text_len = strlen(text);
@@ -219,6 +273,12 @@ int main(void){
 				else printf("Concat byte (%u,%u) has frequency: %u\n", c1,c2,freq);
 			}
 		}
+	}
+
+	updateTable(st,count1,count2);
+	printf("Table successfully updated\n");
+	for(byte i = 0; i < st->nSymbols; i++){
+		printf("Entry %u has len %u\n", i, st->entry[i].len);
 	}
 
 	free(st);

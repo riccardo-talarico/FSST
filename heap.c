@@ -53,12 +53,14 @@ void hpush(heap *h, candidate cand){
 
 
 candidate hgetmin(heap *h){
+	
 	candidate top = h->entry[0];
 	
 	(h->size)--;
-	
-	h->entry[0] = h->entry[h->size];
-	heapify(h, 0);
+	if(h->size != 0){
+		h->entry[0] = h->entry[h->size];
+		heapify(h, 0);
+	}
 	
 	return top;
 }
