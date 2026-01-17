@@ -31,15 +31,21 @@ void heapify(heap *h, size_t i){
 }	
 
 void hpush(heap *h, candidate *cand){
-	size_t idx = h->size;
-	h->size++;
-	h->entry[idx] = *cand;
-
-	while(idx!=0 && h->entry[PARENT(idx)].gain > h->entry[idx].gain){
-		size_t parent = PARENT(idx);
-		hswap(h, parent, idx);
-		idx = parent;
+	if(h->size == MAX_HEAP_SIZE){
+		if(cand.gain < h->entry[0].gain) return;
+		h->entry[0] = *cand;
+		heapify(h, 0);
 	}
+	else {
+		size_t idx = h->size;
+		h->size++;
+		h->entry[idx] = *cand;
+
+		while(idx!=0 && h->entry[PARENT(idx)].gain > h->entry[idx].gain){
+			size_t parent = PARENT(idx);
+			hswap(h, parent, idx);
+			idx = parent;
+		}
 }
 
 
