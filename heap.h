@@ -1,10 +1,11 @@
-#pragma once
+#ifndef HEAP_H
+#define HEAP_H
 
 #include <stdio.h>
 #include <stdint.h>
 
 
-#define MAX_HEAP_SIZE 255
+#define MAX_HEAP_SIZE 256
 #define PARENT(i) (i-1)/2
 #define LEFT(i) (2*i+1)
 #define RIGHT(i) (2*i+1)
@@ -20,12 +21,11 @@ typedef struct{
 	candidate *entry;
 }heap;
 
-
-size_t hparent(size_t i);
-size_t hleft(size_t i);
-size_t hright(size_t i);
-
+heap *hinit(void);
 void hswap(heap *h, size_t i, size_t j);
 void heapify(heap *h, size_t i);
-
+void hpush(heap *h, candidate cand); 
 candidate hgetmin(heap *h);
+
+
+#endif
