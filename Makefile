@@ -1,6 +1,6 @@
 # Compiler and Flags
 CC = gcc
-CFLAGS = -Wall -Wextra -O3 -std=c11
+CFLAGS = -Wall -W -O2
 
 
 TARGET = fsst
