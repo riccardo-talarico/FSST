@@ -10,8 +10,9 @@
 #define RIGHT(i) (2*i+1)
 
 typedef struct{
+	uint8_t symbol[8];
 	uint32_t gain;
-	char *symbol;
+	unsigned char len;
 }candidate;
 
 typedef struct{
@@ -27,4 +28,4 @@ size_t hright(size_t i);
 void hswap(heap *h, size_t i, size_t j);
 void heapify(heap *h, size_t i);
 
-char *hgetmin(heap *h);
+candidate hgetmin(heap *h);
