@@ -6,6 +6,8 @@
 #include "heap.h"
 
 #define DEBUG 1
+#define ESCAPE_CODE 255
+
 
 typedef uint8_t byte;
 
@@ -25,13 +27,13 @@ typedef struct symbolEntry{
 typedef struct symbolTable{
 	symbolEntry entry[256];
 	byte nSymbols;
-	byte firstIdx[257]; 
+	uint16_t firstIdx[257]; 
 }symbolTable;
 
 symbolTable *stInit(void){
 	symbolTable *st = malloc(sizeof(*st));
 	for(int i = 0; i < 257; i++){
-		st->firstIdx[i] = 0;
+		st->firstIdx[i] = 256;
 	}
 	st->nSymbols = 0;
 	return st;
@@ -44,14 +46,16 @@ void insertSymbol(symbolTable *st, symbolEntry e){
 byte findLongestSymbol(const symbolTable *st, byte *text){
 	byte first = text[0];
 
-	byte startCode = st->firstIdx[first];
-	byte endCode = st->firstIdx[first+1];
+	uint16_t startCode = st->firstIdx[first];
+	uint16_t endCode = st->firstIdx[first+1];
+	//FIXME: I'm not sure this is correct!
+	if(endCode = 256 && startCode != 256) endCode = startCode+1;
 	for(byte code=startCode; code<endCode; code++){
 		byte len = st->entry[code].len;
 		if(memcmp(text, st->entry[code].symbol, len)==0) return code;
 	}
 	// Return the escape byte
-	return 255;
+	return ESCAPE_CODE;
 }
 
 
@@ -60,9 +64,9 @@ void encode(const symbolTable *st, byte **in, byte **out){
 #if DEBUG
 	printf("Code found: %u\n",code);
 #endif
-	if(code == 255){
+	if(code == ESCAPE_CODE){
 		// Adding escape sequence
-		*((*out)++) = 255;	
+		*((*out)++) = ESCAPE_CODE;	
 		// Copying the byte
 		*((*out)++) = *((*in)++);
 	}
@@ -75,7 +79,7 @@ void encode(const symbolTable *st, byte **in, byte **out){
 
 void decode(symbolTable *st, byte **in, byte **out){
 	byte code = *((*in)++);
-	if(code != 255){
+	if(code != ESCAPE_CODE){
 		// No escape code so it substitutes the code with the corresponding symbol
 		*((uint64_t*)(*out)) = (uint64_t)(*(st->entry[code].symbol));
 		// Increases the pointer by the length of the symbol
@@ -92,22 +96,22 @@ void compressCount(const symbolTable *st, uint32_t *count1, uint32_t count2[][51
 		const size_t text_len){
 	size_t pos = 0;
 	byte *t = (byte*)text;
-	byte code = findLongestSymbol(st,t);
+	uint16_t code =(uint16_t)findLongestSymbol(st,t);
 
-	size_t symbolLen = (code==255)? 1 : st->entry[code].len; 
-	if(code==255) code=t[pos];
-	else code+=255;
+	size_t symbolLen = (code==ESCAPE_CODE)? 1 : st->entry[code].len; 
+	if(code==ESCAPE_CODE) code=t[pos];
+	else code+=ESCAPE_CODE;
 	count1[code]++;
 #if DEBUG
-	printf("Symbol len %lu\n", symbolLen);
+	printf("Symbol len %lu, code found: %u, current pos: %lu\n", symbolLen, code, pos);
 #endif
-	byte prev = code;
+	uint16_t prev = code;
 	while((pos+=symbolLen)<text_len){
 		code = findLongestSymbol(st, t+pos);
 #if DEBUG
 		printf("Code found: %u, current prev: %u, current pos: %lu\n", code, prev, pos);
 #endif
-		if(code == 255){
+		if(code == ESCAPE_CODE){
 			byte next = t[pos];
 #if DEBUG
 			printf("Byte: %u\n", next);
@@ -118,14 +122,21 @@ void compressCount(const symbolTable *st, uint32_t *count1, uint32_t count2[][51
 		}
 		else{
 			// Symbol frequency count is stored from 255 on
-			code += 255;
+			code += ESCAPE_CODE;
+#if DEBUG
+			printf("Updating frequency of concat prev,code: %u,%u, the second is the entry %u of the symbol table\n",prev, code,code-ESCAPE_CODE);
+#endif
 			// Count frequencies of symbols
 			count1[code]++;
 			// Count frequencies of concat(prev,code)
 			count2[prev][code]++;
 			prev=code;
+
 		}	
-		symbolLen = (code==255)? 1 : st->entry[code].len; 
+		symbolLen = (code==ESCAPE_CODE)? 1 : st->entry[code-ESCAPE_CODE].len; 
+#if DEBUG
+		printf("Symbol len %lu\n", symbolLen);
+#endif
 	}
 }
 
@@ -142,67 +153,86 @@ static int cmpsymbol(const void *p1, const void *p2){
 
 void makeIndex(symbolTable *st){
 	qsort(st->entry,(size_t)st->nSymbols,sizeof(symbolEntry), cmpsymbol);
-	for(byte i=st->nSymbols-1; i > 0; i--){
-		byte letter = (st->entry[i].symbol)[0];
-		st->firstIdx[letter] = i;
+	for(byte i=st->nSymbols; i != 0; i--){
+		byte letter = (st->entry[i-1].symbol)[0];
+		st->firstIdx[letter] = i-1;
 	}
 }
 
 
 void updateTable(symbolTable *st, const uint32_t *count1, const uint32_t count2[][512]){
 	heap *h = hinit();
-	for(uint32_t i = 0; i < 256+((uint32_t)st->nSymbols); i++){
+	for(uint32_t i = 0; i < ESCAPE_CODE+((uint32_t)st->nSymbols); i++){
 		uint32_t gain=count1[i];
 		if(gain == 0) continue;
 		candidate c;
 		c.gain = gain;
-		if(i<256){
+		if(i<ESCAPE_CODE){
 			c.len = 1;
 			memset(c.symbol, 0,8);
 			c.symbol[0] = i;
 		} else{
-			uint32_t j = i- 256;
+			uint32_t j = i- ESCAPE_CODE;
 		   	c.len = st->entry[j].len;
+#if DEBUG
+			printf("st->entry[%u].symbol=",j);
+			for(byte in = 0; in<st->entry[j].len; in++){
+				printf("%c", st->entry[j].symbol[in]);
+			}
+			printf("\n");
+#endif
 			c.gain *= ((uint32_t)c.len);
 			memcpy(c.symbol, st->entry[j].symbol,c.len);
+#if DEBUG
+			printf("i=%u, so actual position in st is %u. Candidate symbol:",i,j);
+			for(byte in = 0; in < c.len; in++){
+				printf("%c",c.symbol[in]);
+			}
+			printf("\n");
+#endif
 		}
 		hpush(h, c);
 		byte remaining_len = 8-c.len;
+		printf("Remaining len: %u\n", remaining_len);
 		byte old_len = c.len;
-		for(uint32_t k =0; k<256+((uint32_t)st->nSymbols); k++){
+		for(uint32_t k =0; k<ESCAPE_CODE+((uint32_t)st->nSymbols); k++){
 			if(remaining_len == 0) break;
 			uint32_t freq = count2[i][k];
 			if(freq == 0) continue;
 			
-			if(k<256){
+			if(k<ESCAPE_CODE){
 				memcpy(&(c.symbol[old_len]), &k, 1);
 				c.len = 1 + old_len;
 #if DEBUG
-				printf("i:%u, k:%u\n",i,k);
+				printf("i:%u, k:%u Candidate concatenation, k no symbol:\n",i,k);
                 for(byte testi=0; testi<c.len; testi++){
-                    if(isprint(c.symbol[testi])) printf("Symbol: %c\n",(char)c.symbol[testi]);
-                    else printf("Symbol: %u\n", c.symbol[testi]);
+                    if(isprint(c.symbol[testi])) printf("%c",(char)c.symbol[testi]);
+                    else printf("%u", c.symbol[testi]);
                 }
+				printf("\n");
 #endif
 			}
 			else{
-				uint32_t j = k-256;
+				uint32_t j = k-ESCAPE_CODE;
 				byte copy_len = (remaining_len>st->entry[j].len)? st->entry[j].len : remaining_len;
 				memcpy(&(c.symbol[old_len]), st->entry[j].symbol, copy_len);
 				c.len = old_len + copy_len;
 #if DEBUG
+				printf("i=%u,k=%u,c.len=%u ,Candidate concatenation, both symbols:",i,k,c.len);
 				for(byte testi=0; testi<c.len; testi++){
-					if(isprint(c.symbol[testi])) printf("Symbol: %c\n",(char)c.symbol[testi]);
-					else printf("Symbol: %u\n", c.symbol[testi]);
+					if(isprint(c.symbol[testi])) printf("%c",(char)c.symbol[testi]);
+					else printf("%u", c.symbol[testi]);
 				}
+				printf("\n");
 #endif
+				
 			}
 			c.gain = c.len * freq;
 			hpush(h, c);
 		}
 	}
 	st->nSymbols = 0;
-	while(st->nSymbols < 255 && h->size > 0){
+	while(st->nSymbols < ESCAPE_CODE && h->size > 0){
 
 		candidate c = hgetmin(h);
 #if DEBUG
@@ -248,7 +278,7 @@ int main(void){
 	outbuf[len] = 0;
 	printf("Successfully Encoded\n");
 	for(size_t i = 0; i < len; i++){
-		if(outbuf[i] !=255){
+		if(outbuf[i] !=ESCAPE_CODE){
 			unsigned char c = (outbuf[i]);
 			if(isprint(c)) printf("%c ",c);
 			else printf("Unprintable, value %u\n",c);
@@ -279,29 +309,15 @@ int main(void){
 	size_t text_len = strlen(text);
 	compressCount(st, count1, count2, text, text_len);
 
-	for(unsigned int i = 0; i < 512; i++){
-		uint32_t freq = count1[i];
-		if(freq > 0){
-			byte c = (i>=255)? (byte)(i-255) : (byte)i;
-			if(isprint(c)) printf("Char %c has %u occurrencies\n",c,freq);
-			else printf("Unprintable value %u has %u occurrencies\n",c,freq);
-		}
-	}
-
-	for(unsigned int i = 0; i < 512; i++){
-		for(unsigned int j = 0; j < 512; j++){
-			uint32_t freq = count2[i][j];
-			if(freq>0){
-				byte c1 = (i>=255)? (byte)(i-255) : (byte)i;
-				byte c2 = (j>=255)? (byte)(j-255) : (byte)j;
-				if(isprint(c1) && isprint(c2)) printf("Concat (%c, %c) has frequency: %u\n", c1,c2,freq);
-				else printf("Concat byte (%u,%u) has frequency: %u\n", c1,c2,freq);
-			}
-		}
-	}
-
 	updateTable(st,count1,count2);
-	printf("Table successfully updated\n");
+
+	
+	uint32_t count11[512]={0};
+	uint32_t count22[512][512]={0};
+	compressCount(st, count11, count22, text, text_len);
+
+	updateTable(st, count11, count22);
+	printf("Table successfully updated twice!\n");
 	for(byte i = 0; i < st->nSymbols; i++){
 		printf("Entry %u, symbol=%s has len %u\n", i, st->entry[i].symbol,st->entry[i].len);
 	}
