@@ -5,13 +5,13 @@
 #include <ctype.h>
 #include "heap.h"
 
-#define DEBUG 0
+#define DEBUG 1
 
 typedef uint8_t byte;
 
 typedef struct symbolEntry{
 	// can range from 1 to 8 byte
-	char *symbol;
+	byte symbol[8];
 	//max length in byte is 8
 	byte len;
 	byte code;
@@ -30,9 +30,6 @@ typedef struct symbolTable{
 
 symbolTable *stInit(void){
 	symbolTable *st = malloc(sizeof(*st));
-	for(int i = 0; i < 256; i++){
-		st->entry[i].symbol = NULL;
-	}
 	for(int i = 0; i < 257; i++){
 		st->firstIdx[i] = 0;
 	}
@@ -44,22 +41,21 @@ void insertSymbol(symbolTable *st, symbolEntry e){
 	st->entry[st->nSymbols++] = e;
 }
 
-byte findLongestSymbol(symbolTable *st, byte *text){
+byte findLongestSymbol(const symbolTable *st, byte *text){
 	byte first = text[0];
 
 	byte startCode = st->firstIdx[first];
 	byte endCode = st->firstIdx[first+1];
 	for(byte code=startCode; code<endCode; code++){
-		char *symbol = st->entry[code].symbol;
 		byte len = st->entry[code].len;
-		if(memcmp(text, symbol, len)==0) return code;
+		if(memcmp(text, st->entry[code].symbol, len)==0) return code;
 	}
 	// Return the escape byte
 	return 255;
 }
 
 
-void encode(symbolTable *st, byte **in, byte **out){
+void encode(const symbolTable *st, byte **in, byte **out){
 	byte code = findLongestSymbol(st, *in);
 #if DEBUG
 	printf("Code found: %u\n",code);
@@ -92,7 +88,8 @@ void decode(symbolTable *st, byte **in, byte **out){
 }
 
 
-void compressCount(symbolTable *st, uint32_t *count1, uint32_t count2[][512], char *text, size_t text_len){
+void compressCount(const symbolTable *st, uint32_t *count1, uint32_t count2[][512], const char *text, 
+		const size_t text_len){
 	size_t pos = 0;
 	byte *t = (byte*)text;
 	byte code = findLongestSymbol(st,t);
@@ -132,12 +129,27 @@ void compressCount(symbolTable *st, uint32_t *count1, uint32_t count2[][512], ch
 	}
 }
 
-void makeIndex(symbolTable *st){
+static int cmpsymbol(const void *p1, const void *p2){
+	const symbolEntry *se1 = (const symbolEntry *)p1;
+	const symbolEntry *se2 = (const symbolEntry *)p2;
 	
+	byte len = (se1->len < se2->len)? se1->len : se2->len;
+	int i = memcmp(se1->symbol, se2->symbol, len);	
+
+	if(i!=0) return i;
+	else return (int)se2->len - (int)se1->len;
+}
+
+void makeIndex(symbolTable *st){
+	qsort(st->entry,(size_t)st->nSymbols,sizeof(symbolEntry), cmpsymbol);
+	for(byte i=st->nSymbols-1; i > 0; i--){
+		byte letter = (st->entry[i].symbol)[0];
+		st->firstIdx[letter] = i;
+	}
 }
 
 
-void updateTable(symbolTable *st, uint32_t *count1, uint32_t count2[][512]){
+void updateTable(symbolTable *st, const uint32_t *count1, const uint32_t count2[][512]){
 	heap *h = hinit();
 	for(uint32_t i = 0; i < 256+((uint32_t)st->nSymbols); i++){
 		uint32_t gain=count1[i];
@@ -145,7 +157,6 @@ void updateTable(symbolTable *st, uint32_t *count1, uint32_t count2[][512]){
 		candidate c;
 		c.gain = gain;
 		if(i<256){
-
 			c.len = 1;
 			memset(c.symbol, 0,8);
 			c.symbol[0] = i;
@@ -157,36 +168,50 @@ void updateTable(symbolTable *st, uint32_t *count1, uint32_t count2[][512]){
 		}
 		hpush(h, c);
 		byte remaining_len = 8-c.len;
+		byte old_len = c.len;
 		for(uint32_t k =0; k<256+((uint32_t)st->nSymbols); k++){
 			if(remaining_len == 0) break;
 			uint32_t freq = count2[i][k];
 			if(freq == 0) continue;
 			
-			candidate c2;
-
 			if(k<256){
-				memcpy(&(c2.symbol[c.len]), &k, 1);
-				c2.len = 1 + c.len;
+				memcpy(&(c.symbol[old_len]), &k, 1);
+				c.len = 1 + old_len;
+#if DEBUG
+				printf("i:%u, k:%u\n",i,k);
+                for(byte testi=0; testi<c.len; testi++){
+                    if(isprint(c.symbol[testi])) printf("Symbol: %c\n",(char)c.symbol[testi]);
+                    else printf("Symbol: %u\n", c.symbol[testi]);
+                }
+#endif
 			}
 			else{
 				uint32_t j = k-256;
 				byte copy_len = (remaining_len>st->entry[j].len)? st->entry[j].len : remaining_len;
-				memcpy(&(c2.symbol[c.len]), &st->entry[j], copy_len);
-				c2.len = c.len + copy_len;
+				memcpy(&(c.symbol[old_len]), st->entry[j].symbol, copy_len);
+				c.len = old_len + copy_len;
+#if DEBUG
+				for(byte testi=0; testi<c.len; testi++){
+					if(isprint(c.symbol[testi])) printf("Symbol: %c\n",(char)c.symbol[testi]);
+					else printf("Symbol: %u\n", c.symbol[testi]);
+				}
+#endif
 			}
-			gain = c2.len * freq;
-			hpush(h, c2);
+			c.gain = c.len * freq;
+			hpush(h, c);
 		}
 	}
 	st->nSymbols = 0;
 	while(st->nSymbols < 255 && h->size > 0){
 
 		candidate c = hgetmin(h);
-		
+#if DEBUG
+		printf("candidate c popped from heap has len %u and symbol %s\n",c.len, c.symbol);
+#endif	
 		symbolEntry e={0};
 		e.len = c.len;
 		e.code = st->nSymbols;
-		memcpy(&e.symbol, &c.symbol, e.len);	
+		memcpy(e.symbol, c.symbol, c.len);
 		insertSymbol(st,e);
 	}
 	free(h);
@@ -278,7 +303,7 @@ int main(void){
 	updateTable(st,count1,count2);
 	printf("Table successfully updated\n");
 	for(byte i = 0; i < st->nSymbols; i++){
-		printf("Entry %u has len %u\n", i, st->entry[i].len);
+		printf("Entry %u, symbol=%s has len %u\n", i, st->entry[i].symbol,st->entry[i].len);
 	}
 
 	free(st);
