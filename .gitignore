@@ -3,3 +3,6 @@ fsst
 .*
 *_test.c
 *.o
+paper
+hfsst
+
