@@ -5,4 +5,4 @@ fsst
 *.o
 paper
 hfsst
-
+*.gch

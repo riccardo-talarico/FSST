@@ -4,8 +4,8 @@
 
 
 heap *hinit(void){
-	heap *h = malloc(sizeof(*h));
-	h->entry = malloc(sizeof(candidate)*MAX_HEAP_SIZE);
+	heap *h = malloc(sizeof(*h) + sizeof(candidate)*MAX_HEAP_SIZE);
+	h->entry = (candidate*)(h+1);
 	h->size = 0;
 	return h;
 }
@@ -21,8 +21,8 @@ void heapify(heap *h, size_t i){
 	size_t right = RIGHT(i);
 	size_t smallest = i;
 
-	if(left < MAX_HEAP_SIZE && h->entry[left].gain < h->entry[i].gain) smallest = left;
-	if(right < MAX_HEAP_SIZE && h->entry[right].gain < h->entry[smallest].gain) smallest = right;
+	if(left < h->size && h->entry[left].gain < h->entry[i].gain) smallest = left;
+	if(right < h->size && h->entry[right].gain < h->entry[smallest].gain) smallest = right;
 
 	if(smallest != i){
 		hswap(h, i, smallest);
