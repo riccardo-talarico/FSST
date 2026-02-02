@@ -13,7 +13,7 @@
 typedef struct{
 	uint8_t symbol[8];
 	uint32_t gain;
-	unsigned char len;
+	uint16_t len;
 }candidate;
 
 typedef struct{

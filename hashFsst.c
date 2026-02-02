@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <ctype.h>
+#include <unistd.h>
 #include "heap.h"
 
 #define DEBUG 1
@@ -31,7 +32,6 @@ typedef struct symbolEntry{
 typedef struct symbolTable{
 	symbolEntry hashTable[HASH_TABLE_SIZE];
 	symbolEntry entry[255];
-	//FIXME: are they necessary?
 	uint16_t shortCodes[SHORT_CODES_SIZE];
 	byte nSymbols;
 }symbolTable;
@@ -58,22 +58,35 @@ uint64_t hash(uint64_t x){
 	return ((x*MAGIC_HASH)^(x>>15)) & (HASH_TABLE_SIZE-1);
 }
 
-
-#define SYMBOL_LEN(c) c>>12
+#define SYMBOL_LEN(c) (((c) >> 12) & 0x0F)
 void insertSymbol(symbolTable *st, symbolEntry e){
 	st->hashTable[hash(e.num)] = e;
+#if DEBUG
+	printf("Inserting symbol %s in hash position %lu, and in non hash-pos: %u\n",e.symbol,hash(e.num), st->nSymbols);
+#endif
 	st->entry[st->nSymbols++] = e;
+	if(SYMBOL_LEN(e.code) < 3) st->shortCodes[e.num] = e.code;
+#if DEBUG 
+	if(SYMBOL_LEN(e.code) < 3) printf("Inserting into short codes\n");
+#endif 
 }
 
 uint16_t findLongestSymbol(const symbolTable *st, byte *text){
-	//FIXME: possible segmentation fault?
+	//Assuming padded text
 	uint64_t word = *(uint64_t*)text;
-	uint64_t idx = hash(word) & (HASH_TABLE_SIZE-1);
+	uint64_t idx = hash(word);
+#if DEBUG
+	printf("Retrieving from hash table at index %lu\n",idx);
+#endif
 	symbolEntry s = st->hashTable[idx];
-
-	uint64_t num = word & (0xFFFFFFFFFFFFFFFF>> s.ignoredBits);
-	//FIXME: double check this return
-	return ((s.num==num) & (s.code != 511))? s.code : st->shortCodes[word&0xFFFF]; 
+    
+	uint64_t mask = 0xFFFFFFFFFFFFFFFF >> (s.ignoredBits & 63);
+	uint64_t num = word & mask; 
+#if DEBUG
+	printf("Ignored bits: %u, word: %lu, num: %lu, s.num: %lu. Symbol. %s\n",s.ignoredBits, word, num, s.num, s.symbol); 
+	if(s.num==num) printf("----------Code retrieved from hash table actually matches---------\n");
+#endif
+	return ((s.num==num) && (s.code != 511))? s.code : st->shortCodes[word&0xFFFF]; 
 }
 
 void encodeScalar(uint8_t *cur, uint8_t *out, symbolTable *st){
@@ -107,7 +120,7 @@ void compressCount(const symbolTable *st, uint32_t *count1, uint32_t count2[][51
 #if DEBUG
 	printf("Original symbol found: %u\n", code);
 #endif
-	//FIXME: I don't know if it's right
+	//Just considering the first 8 bits
 	code = code&0xFF;
 	if(code==ESCAPE_CODE) code=t[pos];
 	else code+=ESCAPE_CODE;
@@ -121,6 +134,8 @@ void compressCount(const symbolTable *st, uint32_t *count1, uint32_t count2[][51
 #if DEBUG
 		printf("Code found: %u, current prev: %u, current pos: %lu\n", code, prev, pos);
 #endif
+		
+		symbolLen = SYMBOL_LEN(code);
 		code = code&0xFF;
 		if(code == ESCAPE_CODE){
 			byte next = t[pos];
@@ -133,7 +148,6 @@ void compressCount(const symbolTable *st, uint32_t *count1, uint32_t count2[][51
 			symbolLen = 1;
 		}
 		else{
-			symbolLen = SYMBOL_LEN(code);
 			// Symbol frequency count is stored from 255 on
 			code += ESCAPE_CODE;
 #if DEBUG
@@ -202,7 +216,7 @@ void updateTable(symbolTable *st, const uint32_t *count1, const uint32_t count2[
 			if(freq == 0) continue;
 			
 			if(k<ESCAPE_CODE){
-				memcpy(&(c.symbol[old_len]), &k, 1);
+				c.symbol[old_len] = (byte)k;
 				c.len = 1 + old_len;
 #if DEBUG
 				printf("--------------\ni:%u, k:%u, c.len=%u CANDIDATE SYMBOL:\n",i,k,c.len);
@@ -216,6 +230,8 @@ void updateTable(symbolTable *st, const uint32_t *count1, const uint32_t count2[
 			else{
 				uint32_t j = k-ESCAPE_CODE;
 				byte slen = SYMBOL_LEN(st->entry[j].code);
+				//FIXME: some implementations actually count the gain only if slen>remaining_len! Check if
+				// it needs to be fixed.
 				byte copy_len = (remaining_len>slen)? slen : remaining_len;
 				memcpy(&(c.symbol[old_len]), st->entry[j].symbol, copy_len);
 				c.len = old_len + copy_len;
@@ -226,10 +242,25 @@ void updateTable(symbolTable *st, const uint32_t *count1, const uint32_t count2[
 					else printf("%u", c.symbol[testi]);
 				}
 				printf("\n");
+
+#endif
+#if DEBUG
+				printf("----------------\ni=%u, so actual position in st is %u.c.len=%u Candidate symbol:",i,j,c.len);
+				for(byte in = 0; in < c.len; in++){
+					printf("%c",c.symbol[in]);
+				}
+				printf("\n");
 #endif
 				
 			}
 			c.gain = c.len * freq;
+#if DEBUG
+			printf("Inserting symbol: ");
+			for(byte in = 0; in < c.len; in++){
+				printf("%c", c.symbol[in]);
+			}
+			printf("\n");
+#endif
 			hpush(h, c);
 		}
 	}
@@ -241,28 +272,43 @@ void updateTable(symbolTable *st, const uint32_t *count1, const uint32_t count2[
 		for(byte pi = 0; pi < min.len; pi++){
 			printf("%c",min.symbol[pi]);
 		}
-		printf("\n");
+		printf("\nHeap has size: %lu\n",h->size);
 #endif	
 		symbolEntry e={0};
-		//FIXME: not sure this is right
-		e.code = st->nSymbols + (min.len << 12);
+		e.code = (uint16_t)st->nSymbols + ((uint16_t)min.len << 12);
+#if DEBUG
+		printf("Before inserting in static table: e.code=%u, st->nSymbols=%u\n",e.code, st->nSymbols);
+#endif
+		e.ignoredBits = (8-min.len)*8;
 		memcpy(e.symbol, min.symbol, min.len);
 		insertSymbol(st,e);
 	}
 	free(h);
 }
 	
+symbolTable *buildSymbolTableFromText(char *text){
+	symbolTable *st = stInit();
+	size_t text_len = strlen(text);
+	for(uint8_t i=0; i < 5; i++){
+		uint32_t count1[512] = {0};
+		uint32_t count2[512][512] = {0};
+		compressCount(st, count1, count2, text, text_len);
+		updateTable(st, count1, count2);
+	}
+	return st;
+}
+
 
 int main(void){
-	uint32_t count1[512];
-	uint32_t count2[512][512];
 	
-	char *text = "tumwitumcvldbtumwitumcvldbtumwitumcvldbtumwitumvldbtumwitumcvldbtumwitumcvldbtumwitumcvldb";
-	size_t len = strlen(text);
+	char *text = "tumwitumcvldb";
 
-	symbolTable *st = stInit();
-	compressCount(st, count1, count2, text, len);
-	updateTable(st, count1, count2);
-
+	symbolTable *st = buildSymbolTableFromText(text);
+	for(int i = 0; i < st->nSymbols; i++){
+		if(st->entry[i].code != 0){
+			printf("Symbol: %s in entry %d\n", st->entry[i].symbol,i);
+		}
+	}
+	free(st);
 	return 0;
 }
