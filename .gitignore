@@ -1,7 +1,8 @@
 a.out
 fsst
 .*
-*_test.c
+test_fsst
+heap_test.c
 *.o
 paper
 hfsst
