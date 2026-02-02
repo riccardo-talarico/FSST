@@ -8,7 +8,28 @@
 
 #define DEBUG 1
 #define ESCAPE_CODE 255
+#ifdef DEBUG
+    #define debug_print(fmt, ...) fprintf(stderr, fmt, ##__VA_ARGS__)
+	#define debug_print_symbol(s, slen) do{\
+		for(int _debug_i = 0; _debug_i < (slen); _debug_i++) {\
+		   	if(isprint(s[_debug_i])) fprintf(stderr,"%c",(char)s[_debug_i]); \
+			else fprintf(stderr,"%u",s[_debug_i]); \
+		} \
+	}while(0)
+#else
+    #define debug_print(fmt, ...) do {} while (0)
+	#define debug_print_symbol(s, slen) do {} while(0)
+#endif
 
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    #define IS_LITTLE_ENDIAN 0
+    // Mask the most significant 3 bytes (0, 1, 2 in memory)
+    #define THREE_BYTE(x) ((x) & 0xFFFFFF0000000000ULL)
+#else
+    #define IS_LITTLE_ENDIAN 1
+    // Mask the least significant 3 bytes (0, 1, 2 in memory)
+    #define THREE_BYTE(x) ((x) & 0x0000000000FFFFFFULL)
+#endif
 
 typedef uint8_t byte;
 
@@ -38,7 +59,6 @@ typedef struct symbolTable{
 
 symbolTable *stInit(void){
 	symbolTable *st = malloc(sizeof(*st));
-	//FIXME: not sure about this initialization
 	symbolEntry s = {511, {0},0};
 	for(int i = 0; i < HASH_TABLE_SIZE; i++){
 		st->hashTable[i] = s;
@@ -51,8 +71,6 @@ symbolTable *stInit(void){
 }
 
 #define MAGIC_HASH 2971215073
-//FF is a byte, 6F means taking the first 3 bits
-#define THREE_BYTE(x) x & 0xFFFFFF
 uint64_t hash(uint64_t x){
 	x = THREE_BYTE(x);
 	return ((x*MAGIC_HASH)^(x>>15)) & (HASH_TABLE_SIZE-1);
@@ -61,31 +79,26 @@ uint64_t hash(uint64_t x){
 #define SYMBOL_LEN(c) (((c) >> 12) & 0x0F)
 void insertSymbol(symbolTable *st, symbolEntry e){
 	st->hashTable[hash(e.num)] = e;
-#if DEBUG
-	printf("Inserting symbol %s in hash position %lu, and in non hash-pos: %u\n",e.symbol,hash(e.num), st->nSymbols);
-#endif
+
+	debug_print_symbol(e.symbol, SYMBOL_LEN(e.code));
+	debug_print("=symbol inserted in hash position %lu, and in non hash pos: %u\n",hash(e.num), st->nSymbols);
+
 	st->entry[st->nSymbols++] = e;
 	if(SYMBOL_LEN(e.code) < 3) st->shortCodes[e.num] = e.code;
-#if DEBUG 
-	if(SYMBOL_LEN(e.code) < 3) printf("Inserting into short codes\n");
-#endif 
 }
 
 uint16_t findLongestSymbol(const symbolTable *st, byte *text){
 	//Assuming padded text
 	uint64_t word = *(uint64_t*)text;
 	uint64_t idx = hash(word);
-#if DEBUG
-	printf("Retrieving from hash table at index %lu\n",idx);
-#endif
 	symbolEntry s = st->hashTable[idx];
     
 	uint64_t mask = 0xFFFFFFFFFFFFFFFF >> (s.ignoredBits & 63);
 	uint64_t num = word & mask; 
-#if DEBUG
-	printf("Ignored bits: %u, word: %lu, num: %lu, s.num: %lu. Symbol. %s\n",s.ignoredBits, word, num, s.num, s.symbol); 
-	if(s.num==num) printf("----------Code retrieved from hash table actually matches---------\n");
-#endif
+
+	debug_print_symbol(s.symbol, SYMBOL_LEN(s.code));
+	debug_print("=symbol with ignored bits: %u, word: %lu, num: %lu, s.num: %lu, Idx: %lu\n",s.ignoredBits, word, num, s.num, idx); 
+	
 	return ((s.num==num) && (s.code != 511))? s.code : st->shortCodes[word&0xFFFF]; 
 }
 
@@ -117,31 +130,26 @@ void compressCount(const symbolTable *st, uint32_t *count1, uint32_t count2[][51
 	byte *t = (byte*)text;
 	uint16_t code = findLongestSymbol(st,t);
 	size_t symbolLen = (code==511)? 1 : SYMBOL_LEN(code); 
-#if DEBUG
-	printf("Original symbol found: %u\n", code);
-#endif
 	//Just considering the first 8 bits
 	code = code&0xFF;
 	if(code==ESCAPE_CODE) code=t[pos];
 	else code+=ESCAPE_CODE;
 	count1[code]++;
-#if DEBUG
-	printf("Symbol len %lu, code found: %u, current pos: %lu\n", symbolLen, code, pos);
-#endif
+
+	debug_print("Symbol len %lu, code found: %u, current pos: %lu\n", symbolLen, code, pos);
+
 	uint16_t prev = code;
 	while((pos+=symbolLen)<text_len){
 		code = findLongestSymbol(st, t+pos);
-#if DEBUG
-		printf("Code found: %u, current prev: %u, current pos: %lu\n", code, prev, pos);
-#endif
+		debug_print("Code found: %u, which is %i.Current prev: %u, current pos: %lu\n",code,code&0xFF,prev,pos);
 		
 		symbolLen = SYMBOL_LEN(code);
 		code = code&0xFF;
 		if(code == ESCAPE_CODE){
 			byte next = t[pos];
-#if DEBUG
-			printf("Updating byte: %u, which is letter %c and concat %u, byte\n", next, (char)next, prev);
-#endif
+
+			debug_print("Updating byte: %u, which is letter %c and concat %u, byte\n", next, (char)next, prev);
+
 			count1[next]++;
 			count2[prev][next]++;
 			prev=next;
@@ -150,14 +158,8 @@ void compressCount(const symbolTable *st, uint32_t *count1, uint32_t count2[][51
 		else{
 			// Symbol frequency count is stored from 255 on
 			code += ESCAPE_CODE;
-#if DEBUG
-			printf("Updating frequency of concat prev,code: %u,%u, the second is the entry %u of the symbol table\n",prev, code,code-ESCAPE_CODE);
-			printf("st->entry[%u]=",code-ESCAPE_CODE);
-			for(byte t = 0; t < symbolLen;t++){
-				printf("%c",st->entry[code-ESCAPE_CODE].symbol[t]);
-			}
-			printf("\n");
-#endif
+			debug_print("Updating frequency of concat prev,code: %u,%u, the second is the entry %u of the symbol table\n",prev, code,code-ESCAPE_CODE);
+			
 			// Count frequencies of symbols
 			count1[code]++;
 			// Count frequencies of concat(prev,code)
@@ -165,11 +167,11 @@ void compressCount(const symbolTable *st, uint32_t *count1, uint32_t count2[][51
 			prev=code;
 
 		}	
-#if DEBUG
-		printf("Symbol len %lu\n", symbolLen);
-#endif
+		debug_print("Symbol len %lu\n", symbolLen);
 	}
 }
+
+
 
 void updateTable(symbolTable *st, const uint32_t *count1, const uint32_t count2[][512]){
 	heap *h = hinit();
@@ -181,34 +183,27 @@ void updateTable(symbolTable *st, const uint32_t *count1, const uint32_t count2[
 		if(i<ESCAPE_CODE){
 			c.len = 1;
 			memset(c.symbol, 0,8);
-#if DEBUG
-			printf("------------------\nCANDIDATE SYMBOL: %u\n",i);
-#endif
+			debug_print("------------------\nCANDIDATE SYMBOL: %u\n",i);
 			c.symbol[0] = i;
 		} else{
 			uint32_t j = i- ESCAPE_CODE;
 		   	c.len = SYMBOL_LEN(st->entry[j].code);
-#if DEBUG
-			printf("-----------------\n");
-			printf("st->entry[%u].c.len=%u. CANDIDATE SYMBOL=",j,c.len);
-			for(byte in = 0; in<c.len; in++){
-				printf("%c", st->entry[j].symbol[in]);
-			}
-			printf("\n");
-#endif
+
+			debug_print("st->entry[%u].c.len=%u. CANDIDATE SYMBOL=",j,c.len);
+			debug_print_symbol(st->entry[j].symbol, c.len);
+
 			c.gain *= ((uint32_t)c.len);
 			memcpy(c.symbol, st->entry[j].symbol,c.len);
-#if DEBUG
-			printf("----------------\ni=%u, so actual position in st is %u.c.len=%u Candidate symbol:",i,j,c.len);
-			for(byte in = 0; in < c.len; in++){
-				printf("%c",c.symbol[in]);
-			}
-			printf("\n");
-#endif
+
+			debug_print("\ni=%u, so actual position in st is %u.c.len=%u Candidate symbol:",i,j,c.len);
+			debug_print_symbol(c.symbol, c.len);
+			
 		}
 		hpush(h, c);
 		byte remaining_len = 8-c.len;
-		printf("Remaining len: %u\n", remaining_len);
+		
+		debug_print("\nRemaining len: %u\n", remaining_len);
+		
 		byte old_len = c.len;
 		for(uint32_t k =0; k<ESCAPE_CODE+((uint32_t)st->nSymbols); k++){
 			if(remaining_len == 0) break;
@@ -218,67 +213,49 @@ void updateTable(symbolTable *st, const uint32_t *count1, const uint32_t count2[
 			if(k<ESCAPE_CODE){
 				c.symbol[old_len] = (byte)k;
 				c.len = 1 + old_len;
-#if DEBUG
-				printf("--------------\ni:%u, k:%u, c.len=%u CANDIDATE SYMBOL:\n",i,k,c.len);
-                for(byte testi=0; testi<c.len; testi++){
-                    if(isprint(c.symbol[testi])) printf("%c",(char)c.symbol[testi]);
-                    else printf("%u", c.symbol[testi]);
-                }
-				printf("\n");
-#endif
+
+				debug_print("--------------\ni:%u, k:%u, c.len=%u CANDIDATE SYMBOL:\n",i,k,c.len);
+                debug_print_symbol(c.symbol, c.len);
+				
 			}
 			else{
 				uint32_t j = k-ESCAPE_CODE;
 				byte slen = SYMBOL_LEN(st->entry[j].code);
-				//FIXME: some implementations actually count the gain only if slen>remaining_len! Check if
-				// it needs to be fixed.
-				byte copy_len = (remaining_len>slen)? slen : remaining_len;
+				
+				byte copy_len = slen;
+				if(remaining_len < slen){
+					copy_len = remaining_len;
+					//count the gain only if the actual symbol can be constructed
+					freq = 0;
+				}
 				memcpy(&(c.symbol[old_len]), st->entry[j].symbol, copy_len);
 				c.len = old_len + copy_len;
-#if DEBUG
-				printf("----------------\ni=%u,k=%u,c.len=%u ,CANDIDATE SYMBOL:",i,k,c.len);
-				for(byte testi=0; testi<c.len; testi++){
-					if(isprint(c.symbol[testi])) printf("%c",(char)c.symbol[testi]);
-					else printf("%u", c.symbol[testi]);
-				}
-				printf("\n");
 
-#endif
-#if DEBUG
-				printf("----------------\ni=%u, so actual position in st is %u.c.len=%u Candidate symbol:",i,j,c.len);
-				for(byte in = 0; in < c.len; in++){
-					printf("%c",c.symbol[in]);
-				}
-				printf("\n");
-#endif
+				debug_print("----------------\ni=%u,k=%u,c.len=%u ,CANDIDATE SYMBOL:",i,k,c.len);
+				debug_print_symbol(c.symbol, c.len);
 				
 			}
 			c.gain = c.len * freq;
-#if DEBUG
-			printf("Inserting symbol: ");
-			for(byte in = 0; in < c.len; in++){
-				printf("%c", c.symbol[in]);
-			}
-			printf("\n");
-#endif
+
+			debug_print("\nInserting symbol: ");
+			debug_print_symbol(c.symbol, c.len);
+
 			hpush(h, c);
 		}
 	}
 	st->nSymbols = 0;
 	while(st->nSymbols < 255 && h->size > 0){
 		candidate min = hgetmin(h);
-#if DEBUG
-		printf("candidate min popped from heap has len %u and symbol:\n",min.len);
-		for(byte pi = 0; pi < min.len; pi++){
-			printf("%c",min.symbol[pi]);
-		}
-		printf("\nHeap has size: %lu\n",h->size);
-#endif	
+
+		debug_print("candidate min popped from heap has len %u and symbol=",min.len);
+		debug_print_symbol(min.symbol, min.len);
+		debug_print("\nHeap has size: %lu\n",h->size);
+		
 		symbolEntry e={0};
 		e.code = (uint16_t)st->nSymbols + ((uint16_t)min.len << 12);
-#if DEBUG
-		printf("Before inserting in static table: e.code=%u, st->nSymbols=%u\n",e.code, st->nSymbols);
-#endif
+
+		debug_print("Before inserting in static table: e.code=%u, st->nSymbols=%u\n",e.code, st->nSymbols);
+
 		e.ignoredBits = (8-min.len)*8;
 		memcpy(e.symbol, min.symbol, min.len);
 		insertSymbol(st,e);
@@ -286,22 +263,46 @@ void updateTable(symbolTable *st, const uint32_t *count1, const uint32_t count2[
 	free(h);
 }
 	
+// To avoid conflicts with previous hashTable
+void resetHashTable(symbolTable *st){
+	symbolEntry s = {511, {0},0};
+	for(int i = 0; i < HASH_TABLE_SIZE; i++){
+		st->hashTable[i] = s;
+	}
+	for(int i = 0; i < SHORT_CODES_SIZE; i++){
+		st->shortCodes[i] = 511;
+	}
+}
+
+char *add_padding(char *text, size_t len){
+	char *t = malloc(len+8);
+	memcpy(t, text, len);
+	for(size_t i = len; i < len+8; i++){
+		t[i] = 0;
+	}
+	return t;
+}
+
 symbolTable *buildSymbolTableFromText(char *text){
 	symbolTable *st = stInit();
 	size_t text_len = strlen(text);
+	char *t = add_padding(text,text_len);
 	for(uint8_t i=0; i < 5; i++){
 		uint32_t count1[512] = {0};
 		uint32_t count2[512][512] = {0};
 		compressCount(st, count1, count2, text, text_len);
+		resetHashTable(st);
 		updateTable(st, count1, count2);
 	}
+	free(t);
 	return st;
 }
 
 
+
 int main(void){
 	
-	char *text = "tumwitumcvldb";
+	char *text = "tumcwitumvldb";
 
 	symbolTable *st = buildSymbolTableFromText(text);
 	for(int i = 0; i < st->nSymbols; i++){
